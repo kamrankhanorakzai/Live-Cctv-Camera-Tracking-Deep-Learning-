@@ -2,3 +2,4 @@
 token.json
 *.weights
 credentials.json
+*.log
