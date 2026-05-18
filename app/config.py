@@ -5,16 +5,13 @@ Sensitive values (credentials, IDs) live in .env — never hardcoded here.
 import os
 import urllib.parse
 
-# Load .env automatically if python-dotenv is available.
-# Install once:  pip install python-dotenv
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass   # .env already exported by the shell / Docker — no problem
+    pass
 
 # ── Camera ────────────────────────────────────────────────────────────────────
-# Use os.getenv with defaults so missing .env never raises KeyError
 USERNAME = os.getenv("CAM_USER", "kami")
 PASSWORD = os.getenv("CAM_PASS", "kami123")
 HOST     = os.getenv("CAM_HOST", "192.168.1.10")
@@ -23,6 +20,7 @@ PORT     = int(os.getenv("CAM_PORT", "554"))
 _u = urllib.parse.quote(USERNAME, safe="")
 _p = urllib.parse.quote(PASSWORD, safe="")
 
+# Force TCP transport via ffmpeg options — avoids UDP packet loss + HEVC POC errors
 VIDEO_SOURCE = os.getenv(
     "VIDEO_SOURCE",
     f"rtsp://{_u}:{_p}@{HOST}:{PORT}/Streaming/Channels/101"
@@ -38,34 +36,58 @@ TOKEN_FILE           = os.getenv("TOKEN_FILE", "token.json")
 YOLO_CFG     = os.getenv("YOLO_CFG",     "yolov4-tiny.cfg")
 YOLO_WEIGHTS = os.getenv("YOLO_WEIGHTS", "yolov4-tiny.weights")
 YOLO_NAMES   = os.getenv("YOLO_NAMES",   "coco.names")
-YOLO_CONF    = float(os.getenv("YOLO_CONF", "0.30"))   # was 0.45 — detect lower-confidence objects
+YOLO_CONF    = float(os.getenv("YOLO_CONF", "0.30"))
 YOLO_NMS     = float(os.getenv("YOLO_NMS",  "0.40"))
 
 # ── Detection ─────────────────────────────────────────────────────────────────
-DETECT_SCALE  = 0.5
-SAVE_CLASSES  = ["person", "car", "truck", "bus", "motorcycle", "bicycle"]
-MIN_BOX_AREA  = 2000    # was 4000 — allow smaller bounding boxes
-MIN_FACE_SIZE = 50
+DETECT_SCALE  = float(os.getenv("DETECT_SCALE", "0.5"))
+# Comma-separated list of COCO class names to save; empty = save all
+_save_cls_raw = os.getenv("SAVE_CLASSES", "person,car,truck,bus,motorcycle,bicycle")
+SAVE_CLASSES  = [c.strip() for c in _save_cls_raw.split(",") if c.strip()]
+MIN_BOX_AREA  = int(os.getenv("MIN_BOX_AREA",  "2000"))
+MIN_FACE_SIZE = int(os.getenv("MIN_FACE_SIZE",  "50"))
 
 # ── Cooldowns ─────────────────────────────────────────────────────────────────
-PERSON_COOLDOWN_S = 30   # was 90 — re-save same person every 30s
-CLASS_COOLDOWN_S  = 15   # was 45 — re-save cars/bikes every 15s
+# How long (seconds) to wait before saving another image of the same person/class.
+# Lower = more images captured per encounter; raise to prevent burst storage.
+# Recommended range — person: 8–20 s, other classes: 5–12 s
+PERSON_COOLDOWN_S = float(os.getenv("PERSON_COOLDOWN_S", "3"))
+CLASS_COOLDOWN_S  = float(os.getenv("CLASS_COOLDOWN_S",   "6"))
 
 # ── Motion gate ───────────────────────────────────────────────────────────────
-MOTION_THRESHOLD = 800   # was 1200 — trigger on subtler motion
-MOTION_FRAMES    = 2
+MOTION_THRESHOLD = int(os.getenv("MOTION_THRESHOLD", "800"))
+MOTION_FRAMES    = int(os.getenv("MOTION_FRAMES",    "2"))
 
 # ── Smart save gate ───────────────────────────────────────────────────────────
-MIN_OBJECT_FRAME_RATIO = float(os.getenv("MIN_OBJECT_FRAME_RATIO", "0.002"))   # was 0.007
-MIN_STABLE_FRAMES      = int(os.getenv("MIN_STABLE_FRAMES", "1"))
-MAX_SAVES_PER_CLASS    = int(os.getenv("MAX_SAVES_PER_CLASS", "0"))
+MIN_OBJECT_FRAME_RATIO = float(os.getenv("MIN_OBJECT_FRAME_RATIO", "0.004"))
+MIN_STABLE_FRAMES      = int(os.getenv("MIN_STABLE_FRAMES",        "1"))
+# 0 = unlimited saves per class per session
+MAX_SAVES_PER_CLASS    = int(os.getenv("MAX_SAVES_PER_CLASS",      "0"))
 
 # ── Night mode ────────────────────────────────────────────────────────────────
-AUTO_NIGHT       = True
-NIGHT_BRIGHTNESS = 100
-CLAHE_CLIP       = 3.0
-CLAHE_GRID       = (8, 8)
+AUTO_NIGHT       = os.getenv("AUTO_NIGHT", "true").lower() == "true"
+NIGHT_BRIGHTNESS = int(os.getenv("NIGHT_BRIGHTNESS", "100"))
+CLAHE_CLIP       = float(os.getenv("CLAHE_CLIP", "3.0"))
+_cg              = os.getenv("CLAHE_GRID", "8,8").split(",")
+CLAHE_GRID       = (int(_cg[0]), int(_cg[1]))
 
 # ── Save ──────────────────────────────────────────────────────────────────────
-SAVE_MODE        = "full"
-LOCAL_BACKUP_DIR = "saved_persons"
+# "full" saves the entire frame; "crop" saves only the detected bounding box
+SAVE_MODE        = os.getenv("SAVE_MODE", "full")
+LOCAL_BACKUP_DIR = os.getenv("LOCAL_BACKUP_DIR", "saved_persons")
+
+# ── FPS throttle ──────────────────────────────────────────────────────────────
+# Max frames per second to process through YOLO (caps CPU on t3.small)
+TARGET_PROC_FPS = float(os.getenv("TARGET_PROC_FPS", "5.0"))
+
+# ── Upload retry ──────────────────────────────────────────────────────────────
+UPLOAD_MAX_RETRIES     = int(os.getenv("UPLOAD_MAX_RETRIES",    "6"))
+UPLOAD_BASE_BACKOFF_S  = float(os.getenv("UPLOAD_BASE_BACKOFF_S", "1.0"))  # doubles each attempt
+UPLOAD_REQUEST_TIMEOUT = int(os.getenv("UPLOAD_REQUEST_TIMEOUT", "30"))    # seconds
+RETRY_SCAN_INTERVAL_S  = int(os.getenv("RETRY_SCAN_INTERVAL_S",  "60"))
+
+# ── RTSP ─────────────────────────────────────────────────────────────────────
+RTSP_OPEN_TIMEOUT_MS  = int(os.getenv("RTSP_OPEN_TIMEOUT_MS",  "30000"))
+RTSP_READ_TIMEOUT_MS  = int(os.getenv("RTSP_READ_TIMEOUT_MS",  "15000"))
+RTSP_RECONNECT_DELAY  = int(os.getenv("RTSP_RECONNECT_DELAY",  "10"))
+RTSP_MAX_READ_FAILS   = int(os.getenv("RTSP_MAX_READ_FAILS",   "15"))

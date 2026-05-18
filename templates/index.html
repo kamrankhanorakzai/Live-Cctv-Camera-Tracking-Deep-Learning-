@@ -5,42 +5,83 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Live CCTV Tracker</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  /* ── Fluid type scale via clamp(min, preferred-vw, max)
+       min = ~360px phone, max = 1280px desktop               */
+  :root {
+    --fs-xs:   clamp(0.65rem,  1.8vw,  0.75rem);
+    --fs-sm:   clamp(0.75rem,  2.2vw,  0.85rem);
+    --fs-base: clamp(0.85rem,  2.6vw,  0.95rem);
+    --fs-md:   clamp(0.95rem,  3vw,    1.05rem);
+    --fs-lg:   clamp(1rem,     3.5vw,  1.3rem);
+    --fs-xl:   clamp(1.1rem,   4vw,    1.4rem);
+
+    --gap-sm:  clamp(8px,  2vw, 12px);
+    --gap-md:  clamp(12px, 3vw, 16px);
+    --pad-x:   clamp(12px, 4vw, 24px);
+    --pad-y:   clamp(10px, 2.5vw, 14px);
+
+    --bg:      #0d0d0d;
+    --surface: #1a1a2e;
+    --border:  #2a2a4a;
+    --accent:  #00ff88;
+    --blue:    #00ccff;
+    --orange:  #ffaa00;
+    --red:     #ff4444;
+    --muted:   #888;
+    --text:    #e0e0e0;
+  }
+
   body {
-    background: #0d0d0d;
-    color: #e0e0e0;
-    font-family: 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    font-size: var(--fs-base);
+    line-height: 1.5;
     min-height: 100vh;
   }
+
   header {
-    background: #1a1a2e;
-    padding: 14px 24px;
+    background: var(--surface);
+    padding: var(--pad-y) var(--pad-x);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    border-bottom: 2px solid #00ff88;
+    border-bottom: 2px solid var(--accent);
+    gap: 8px;
   }
   header h1 {
-    font-size: 1.3rem;
-    color: #00ff88;
-    letter-spacing: 1px;
+    font-size: var(--fs-xl);
+    color: var(--accent);
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
+
   .badge {
-    padding: 4px 12px;
+    padding: clamp(3px,1vw,5px) clamp(8px,2.5vw,14px);
     border-radius: 20px;
-    font-size: 0.75rem;
+    font-size: var(--fs-xs);
     font-weight: bold;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .badge-live { background: #ff3333; color: white; animation: pulse 1.5s infinite; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
 
+  /* ── Two-column on ≥641px, single column on mobile ── */
   .layout {
     display: grid;
-    grid-template-columns: 1fr 300px;
-    gap: 16px;
-    padding: 16px;
+    grid-template-columns: 1fr clamp(220px, 28vw, 300px);
+    gap: var(--gap-md);
+    padding: var(--gap-md) var(--pad-x);
     max-width: 1400px;
     margin: auto;
+  }
+  @media (max-width: 640px) {
+    .layout { grid-template-columns: 1fr; }
   }
 
   .video-box {
@@ -48,82 +89,101 @@
     border: 1px solid #222;
     border-radius: 8px;
     overflow: hidden;
+    aspect-ratio: 16 / 9;
   }
-  .video-box img {
-    width: 100%;
-    display: block;
-  }
+  .video-box img { width: 100%; height: 100%; object-fit: contain; display: block; }
 
-  .sidebar { display: flex; flex-direction: column; gap: 12px; }
+  .sidebar { display: flex; flex-direction: column; gap: var(--gap-sm); }
+
+  /* On mobile show stats + health as 2 columns */
+  .sidebar-grid { display: contents; }
+  @media (max-width: 640px) {
+    .sidebar-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--gap-sm);
+    }
+  }
 
   .card {
-    background: #1a1a2e;
-    border: 1px solid #2a2a4a;
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 14px;
+    padding: clamp(10px, 3vw, 14px);
   }
   .card h3 {
-    color: #00ff88;
-    font-size: 0.85rem;
+    color: var(--accent);
+    font-size: var(--fs-xs);
     text-transform: uppercase;
     letter-spacing: 1px;
-    margin-bottom: 10px;
+    margin-bottom: clamp(6px, 2vw, 10px);
   }
 
   .stat-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 6px 0;
-    border-bottom: 1px solid #2a2a4a;
-    font-size: 0.9rem;
+    padding: clamp(4px,1.5vw,7px) 0;
+    border-bottom: 1px solid var(--border);
+    font-size: var(--fs-sm);
+    gap: 6px;
   }
   .stat-row:last-child { border-bottom: none; }
+  .stat-row > span:first-child { color: var(--muted); flex-shrink: 0; }
+
   .stat-val {
     font-weight: bold;
-    color: #00ccff;
-    font-size: 1.05rem;
+    color: var(--blue);
+    font-size: var(--fs-md);
+    text-align: right;
+    word-break: break-all;
   }
-  .stat-val.green  { color: #00ff88; }
-  .stat-val.orange { color: #ffaa00; }
-  .stat-val.red    { color: #ff4444; }
+  .stat-val.green  { color: var(--accent); }
+  .stat-val.orange { color: var(--orange); }
+  .stat-val.red    { color: var(--red); }
 
   .btn {
     width: 100%;
-    padding: 10px;
+    padding: clamp(9px,2.5vw,11px) 12px;
     border: none;
     border-radius: 6px;
     cursor: pointer;
     font-weight: bold;
-    font-size: 0.9rem;
-    transition: opacity 0.2s;
+    font-size: var(--fs-sm);
+    transition: opacity 0.2s, transform 0.1s;
+    touch-action: manipulation;
   }
-  .btn:hover { opacity: 0.85; }
-  .btn-danger  { background: #cc2222; color: white; }
-  .btn-info    { background: #1a6aff; color: white; }
+  .btn:hover  { opacity: 0.85; }
+  .btn:active { transform: scale(0.97); }
+  .btn-danger { background: #cc2222; color: white; }
+  .btn-info   { background: #1a6aff; color: white; }
 
   #status-msg {
-    font-size: 0.8rem;
-    color: #aaa;
+    font-size: var(--fs-xs);
+    color: var(--muted);
     text-align: center;
-    min-height: 18px;
+    min-height: 16px;
     margin-top: 6px;
   }
 
   .night-badge {
     display: inline-block;
-    padding: 2px 8px;
+    padding: 2px clamp(5px,1.5vw,8px);
     border-radius: 10px;
-    font-size: 0.75rem;
+    font-size: var(--fs-xs);
     font-weight: bold;
+    white-space: nowrap;
   }
   .night-on  { background:#1a1a5e; color:#aaaaff; }
   .night-off { background:#3a2a00; color:#ffcc44; }
 
+  .health-ok  { color: var(--accent); }
+  .health-bad { color: var(--red); }
+
   footer {
     text-align: center;
-    padding: 12px;
-    font-size: 0.75rem;
+    padding: clamp(8px,2vw,12px) var(--pad-x);
+    font-size: var(--fs-xs);
     color: #555;
   }
 </style>
@@ -137,103 +197,88 @@
 
 <div class="layout">
 
-  <!-- Video stream -->
   <div class="video-box">
     <img id="stream" src="/video_feed" alt="Live Feed">
   </div>
 
-  <!-- Sidebar -->
   <div class="sidebar">
 
-    <!-- Stats card -->
-    <div class="card">
-      <h3>📊 Stats</h3>
-      <div class="stat-row">
-        <span>Mode</span>
-        <span class="stat-val" id="s-mode">—</span>
+    <div class="sidebar-grid">
+
+      <div class="card">
+        <h3>📊 Stats</h3>
+        <div class="stat-row"><span>Mode</span><span class="stat-val" id="s-mode">—</span></div>
+        <div class="stat-row"><span>FPS</span><span class="stat-val" id="s-fps">—</span></div>
+        <div class="stat-row"><span>Night</span><span id="s-night">—</span></div>
+        <div class="stat-row"><span>Detections</span><span class="stat-val" id="s-det">0</span></div>
+        <div class="stat-row"><span>Saved</span><span class="stat-val green" id="s-saved">0</span></div>
+        <div class="stat-row"><span>Skipped</span><span class="stat-val orange" id="s-skipped">0</span></div>
+        <div class="stat-row"><span>Queue</span><span class="stat-val" id="s-queue">0</span></div>
       </div>
-      <div class="stat-row">
-        <span>FPS</span>
-        <span class="stat-val" id="s-fps">—</span>
+
+      <div class="card">
+        <h3>❤️ Health</h3>
+        <div class="stat-row"><span>Status</span><span class="stat-val" id="h-status">—</span></div>
+        <div class="stat-row"><span>Uptime</span><span class="stat-val" id="h-uptime">—</span></div>
       </div>
-      <div class="stat-row">
-        <span>Night Mode</span>
-        <span id="s-night">—</span>
-      </div>
-      <div class="stat-row">
-        <span>Detections</span>
-        <span class="stat-val" id="s-det">0</span>
-      </div>
-      <div class="stat-row">
-        <span>Saved to Drive</span>
-        <span class="stat-val green" id="s-saved">0</span>
-      </div>
-      <div class="stat-row">
-        <span>Skipped</span>
-        <span class="stat-val orange" id="s-skipped">0</span>
-      </div>
-      <div class="stat-row">
-        <span>Upload Queue</span>
-        <span class="stat-val" id="s-queue">0</span>
-      </div>
+
     </div>
 
-    <!-- Controls card -->
     <div class="card">
       <h3>🔧 Controls</h3>
-      <button class="btn btn-danger" onclick="resetCooldowns()">
-        🔄 Reset Cooldowns
-      </button>
+      <button class="btn btn-danger" onclick="resetCooldowns()">🔄 Reset Cooldowns</button>
       <div id="status-msg"></div>
       <br>
-      <button class="btn btn-info" onclick="refreshStream()">
-        📡 Refresh Stream
-      </button>
+      <button class="btn btn-info" onclick="refreshStream()">📡 Refresh Stream</button>
     </div>
 
-    <!-- Info card -->
     <div class="card">
       <h3>ℹ️ Info</h3>
-      <div class="stat-row">
-        <span>Detection</span>
-        <span class="stat-val" style="font-size:0.8rem">YOLO+CLAHE</span>
-      </div>
-      <div class="stat-row">
-        <span>Storage</span>
-        <span class="stat-val" style="font-size:0.8rem">Google Drive</span>
-      </div>
-      <div class="stat-row">
-        <span>Dedup</span>
-        <span class="stat-val" style="font-size:0.8rem">Cooldown Timer</span>
-      </div>
+      <div class="stat-row"><span>Detection</span><span class="stat-val" style="font-size:var(--fs-xs)">YOLO+CLAHE</span></div>
+      <div class="stat-row"><span>Storage</span><span class="stat-val" style="font-size:var(--fs-xs)">Google Drive</span></div>
+      <div class="stat-row"><span>Dedup</span><span class="stat-val" style="font-size:var(--fs-xs)">Cooldown</span></div>
     </div>
 
   </div>
 </div>
 
-<footer>Live Tracking System — powered by FastAPI · OpenCV · YOLO</footer>
+<footer>Live Tracking System — FastAPI · OpenCV · YOLO</footer>
 
 <script>
+  function fmtUptime(s) {
+    const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
+    return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+  }
   async function updateStats() {
     try {
-      const res  = await fetch("/stats");
-      const data = await res.json();
-      document.getElementById("s-fps").textContent     = data.fps || "—";
-      document.getElementById("s-mode").textContent    = data.mode || "—";
-      document.getElementById("s-det").textContent     = data.detections || 0;
-      document.getElementById("s-saved").textContent   = data.saved || 0;
-      document.getElementById("s-skipped").textContent = data.skipped || 0;
-      document.getElementById("s-queue").textContent   = data.queue || 0;
-
-      const nightEl = document.getElementById("s-night");
-      const isNight = data.night === 1;
-      nightEl.innerHTML = isNight
+      const d = await fetch("/stats").then(r => r.json());
+      document.getElementById("s-fps").textContent     = d.fps   || "—";
+      document.getElementById("s-mode").textContent    = d.mode  || "—";
+      document.getElementById("s-det").textContent     = d.detections || 0;
+      document.getElementById("s-saved").textContent   = d.saved     || 0;
+      document.getElementById("s-skipped").textContent = d.skipped   || 0;
+      document.getElementById("s-queue").textContent   = d.queue     || 0;
+      document.getElementById("s-night").innerHTML = d.night === 1
         ? '<span class="night-badge night-on">🌙 ON</span>'
         : '<span class="night-badge night-off">☀ OFF</span>';
-    } catch(e) { /* ignore */ }
+    } catch(e) {}
   }
-  setInterval(updateStats, 2000);
-  updateStats();
+  async function updateHealth() {
+    try {
+      const d = await fetch("/health").then(r => r.json());
+      const el = document.getElementById("h-status");
+      el.textContent = d.status === "ok" ? "✅ OK" : "⚠ DEGRADED";
+      el.className   = "stat-val " + (d.status === "ok" ? "health-ok" : "health-bad");
+      document.getElementById("h-uptime").textContent = fmtUptime(d.uptime_s || 0);
+    } catch(e) {
+      const el = document.getElementById("h-status");
+      el.textContent = "❌ OFFLINE";
+      el.className   = "stat-val health-bad";
+    }
+  }
+  setInterval(updateStats,  2000);
+  setInterval(updateHealth, 5000);
+  updateStats(); updateHealth();
 
   async function resetCooldowns() {
     const msg = document.getElementById("status-msg");
@@ -241,20 +286,13 @@
     try {
       await fetch("/reset", { method: "POST" });
       msg.textContent = "✅ Reset done!";
-    } catch(e) {
-      msg.textContent = "❌ Reset failed";
-    }
+    } catch(e) { msg.textContent = "❌ Reset failed"; }
     setTimeout(() => { msg.textContent = ""; }, 3000);
   }
-
   function refreshStream() {
-    const img = document.getElementById("stream");
-    img.src = "/video_feed?" + Date.now();
+    document.getElementById("stream").src = "/video_feed?" + Date.now();
   }
-
-  document.getElementById("stream").onerror = function() {
-    setTimeout(refreshStream, 3000);
-  };
+  document.getElementById("stream").onerror = () => setTimeout(refreshStream, 3000);
 </script>
 </body>
 </html>
