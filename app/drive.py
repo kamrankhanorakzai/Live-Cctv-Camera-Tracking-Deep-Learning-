@@ -21,10 +21,73 @@ from app.config import (
     ENCODINGS_FILENAME, TOKEN_FILE, LOCAL_BACKUP_DIR,
     UPLOAD_MAX_RETRIES, UPLOAD_BASE_BACKOFF_S,
     UPLOAD_REQUEST_TIMEOUT, RETRY_SCAN_INTERVAL_S,
+    BACKUP_MAX_AGE_DAYS, BACKUP_MAX_FILES,
 )
 from app.logger import get_logger
 
 log = get_logger("drive")
+
+
+def _prune_backup_dir(in_flight: set, in_flight_lock: threading.Lock) -> None:
+    """Delete old files in saved_persons/ when age or count limits are exceeded."""
+    if BACKUP_MAX_AGE_DAYS <= 0 and BACKUP_MAX_FILES <= 0:
+        return
+    try:
+        names = [f for f in os.listdir(LOCAL_BACKUP_DIR) if f.endswith(".jpg")]
+    except OSError:
+        return
+    if not names:
+        return
+
+    now = time.time()
+    max_age_s = BACKUP_MAX_AGE_DAYS * 86400 if BACKUP_MAX_AGE_DAYS > 0 else None
+
+    entries = []
+    for fname in names:
+        path = os.path.join(LOCAL_BACKUP_DIR, fname)
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        entries.append((st.st_mtime, fname, path))
+
+    removed = 0
+    if max_age_s is not None:
+        for mtime, fname, path in entries:
+            if now - mtime < max_age_s:
+                continue
+            with in_flight_lock:
+                if fname in in_flight:
+                    continue
+            try:
+                os.remove(path)
+                removed += 1
+            except OSError:
+                pass
+
+    if BACKUP_MAX_FILES > 0:
+        try:
+            remaining = [
+                (os.path.getmtime(os.path.join(LOCAL_BACKUP_DIR, f)), f)
+                for f in os.listdir(LOCAL_BACKUP_DIR)
+                if f.endswith(".jpg")
+            ]
+        except OSError:
+            return
+        if len(remaining) > BACKUP_MAX_FILES:
+            remaining.sort()
+            for _, fname in remaining[: len(remaining) - BACKUP_MAX_FILES]:
+                with in_flight_lock:
+                    if fname in in_flight:
+                        continue
+                try:
+                    os.remove(os.path.join(LOCAL_BACKUP_DIR, fname))
+                    removed += 1
+                except OSError:
+                    pass
+
+    if removed:
+        log.info(f"Backup cleanup: removed {removed} old file(s) from {LOCAL_BACKUP_DIR}")
 
 
 class DriveClient:
@@ -192,6 +255,7 @@ def upload_worker(drive: DriveClient, upload_q: queue.Queue):
         """
         while True:
             time.sleep(RETRY_SCAN_INTERVAL_S)
+            _prune_backup_dir(in_flight, in_flight_lock)
             try:
                 pending = [
                     f for f in os.listdir(LOCAL_BACKUP_DIR)

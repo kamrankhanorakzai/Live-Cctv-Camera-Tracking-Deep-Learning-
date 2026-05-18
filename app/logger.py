@@ -1,15 +1,18 @@
 """
 app/logger.py — Structured logging for production.
 Writes to both console and rotating file logs.
+
+Disk usage is capped automatically: when cctv.log reaches LOG_MAX_BYTES it rotates
+and the oldest backup is deleted (keeps LOG_BACKUP_COUNT files max).
 """
 import logging
 import logging.handlers
 import os
 import sys
 
-LOG_DIR  = os.getenv("LOG_DIR", "logs")
+from app.config import LOG_DIR, LOG_LEVEL, LOG_MAX_BYTES, LOG_BACKUP_COUNT
+
 LOG_FILE = os.path.join(LOG_DIR, "cctv.log")
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -26,8 +29,8 @@ def _build_handler_console() -> logging.StreamHandler:
 def _build_handler_file() -> logging.handlers.RotatingFileHandler:
     h = logging.handlers.RotatingFileHandler(
         LOG_FILE,
-        maxBytes=10 * 1024 * 1024,   # 10 MB per file
-        backupCount=5,
+        maxBytes=LOG_MAX_BYTES,
+        backupCount=LOG_BACKUP_COUNT,
         encoding="utf-8",
     )
     h.setFormatter(logging.Formatter(_FMT, _DATE_FMT))

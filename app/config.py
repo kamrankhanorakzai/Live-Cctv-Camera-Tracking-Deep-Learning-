@@ -98,3 +98,15 @@ RTSP_STALE_FRAME_S    = float(os.getenv("RTSP_STALE_FRAME_S",  "5.0"))
 STREAM_MAX_WIDTH     = int(os.getenv("STREAM_MAX_WIDTH",     "960"))
 STREAM_JPEG_QUALITY  = int(os.getenv("STREAM_JPEG_QUALITY",  "78"))
 STREAM_TARGET_FPS    = float(os.getenv("STREAM_TARGET_FPS",  "20.0"))
+
+# ── Logging (rotating files — old logs deleted automatically) ───────────────
+LOG_DIR              = os.getenv("LOG_DIR", "logs")
+LOG_LEVEL            = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_MAX_MB           = int(os.getenv("LOG_MAX_MB", "10"))        # rotate when file reaches this size
+LOG_BACKUP_COUNT     = int(os.getenv("LOG_BACKUP_COUNT", "5"))    # rotated files kept; oldest deleted
+LOG_MAX_BYTES        = max(LOG_MAX_MB, 1) * 1024 * 1024
+# Max log disk ≈ LOG_MAX_MB × (LOG_BACKUP_COUNT + 1)  e.g. 10 × 6 = 60 MB
+
+# ── Local backup folder cleanup (saved_persons/) ────────────────────────────
+BACKUP_MAX_AGE_DAYS  = int(os.getenv("BACKUP_MAX_AGE_DAYS", "14"))  # 0 = disabled
+BACKUP_MAX_FILES     = int(os.getenv("BACKUP_MAX_FILES", "200"))    # 0 = unlimited
