@@ -1,3 +1,4 @@
 .env
 token.json
 *.weights
+credentials.json
