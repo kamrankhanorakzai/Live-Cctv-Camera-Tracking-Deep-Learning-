@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live CCTV Tracker</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d0d0d;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', sans-serif;
+    min-height: 100vh;
+  }
+  header {
+    background: #1a1a2e;
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 2px solid #00ff88;
+  }
+  header h1 {
+    font-size: 1.3rem;
+    color: #00ff88;
+    letter-spacing: 1px;
+  }
+  .badge {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: bold;
+  }
+  .badge-live { background: #ff3333; color: white; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    gap: 16px;
+    padding: 16px;
+    max-width: 1400px;
+    margin: auto;
+  }
+
+  .video-box {
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .video-box img {
+    width: 100%;
+    display: block;
+  }
+
+  .sidebar { display: flex; flex-direction: column; gap: 12px; }
+
+  .card {
+    background: #1a1a2e;
+    border: 1px solid #2a2a4a;
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .card h3 {
+    color: #00ff88;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 10px;
+  }
+
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid #2a2a4a;
+    font-size: 0.9rem;
+  }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-val {
+    font-weight: bold;
+    color: #00ccff;
+    font-size: 1.05rem;
+  }
+  .stat-val.green  { color: #00ff88; }
+  .stat-val.orange { color: #ffaa00; }
+  .stat-val.red    { color: #ff4444; }
+
+  .btn {
+    width: 100%;
+    padding: 10px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 0.9rem;
+    transition: opacity 0.2s;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn-danger  { background: #cc2222; color: white; }
+  .btn-info    { background: #1a6aff; color: white; }
+
+  #status-msg {
+    font-size: 0.8rem;
+    color: #aaa;
+    text-align: center;
+    min-height: 18px;
+    margin-top: 6px;
+  }
+
+  .night-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.75rem;
+    font-weight: bold;
+  }
+  .night-on  { background:#1a1a5e; color:#aaaaff; }
+  .night-off { background:#3a2a00; color:#ffcc44; }
+
+  footer {
+    text-align: center;
+    padding: 12px;
+    font-size: 0.75rem;
+    color: #555;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🎥 Live CCTV Tracker</h1>
+  <span class="badge badge-live">● LIVE</span>
+</header>
+
+<div class="layout">
+
+  <!-- Video stream -->
+  <div class="video-box">
+    <img id="stream" src="/video_feed" alt="Live Feed">
+  </div>
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+
+    <!-- Stats card -->
+    <div class="card">
+      <h3>📊 Stats</h3>
+      <div class="stat-row">
+        <span>Mode</span>
+        <span class="stat-val" id="s-mode">—</span>
+      </div>
+      <div class="stat-row">
+        <span>FPS</span>
+        <span class="stat-val" id="s-fps">—</span>
+      </div>
+      <div class="stat-row">
+        <span>Night Mode</span>
+        <span id="s-night">—</span>
+      </div>
+      <div class="stat-row">
+        <span>Detections</span>
+        <span class="stat-val" id="s-det">0</span>
+      </div>
+      <div class="stat-row">
+        <span>Saved to Drive</span>
+        <span class="stat-val green" id="s-saved">0</span>
+      </div>
+      <div class="stat-row">
+        <span>Skipped</span>
+        <span class="stat-val orange" id="s-skipped">0</span>
+      </div>
+      <div class="stat-row">
+        <span>Upload Queue</span>
+        <span class="stat-val" id="s-queue">0</span>
+      </div>
+    </div>
+
+    <!-- Controls card -->
+    <div class="card">
+      <h3>🔧 Controls</h3>
+      <button class="btn btn-danger" onclick="resetCooldowns()">
+        🔄 Reset Cooldowns
+      </button>
+      <div id="status-msg"></div>
+      <br>
+      <button class="btn btn-info" onclick="refreshStream()">
+        📡 Refresh Stream
+      </button>
+    </div>
+
+    <!-- Info card -->
+    <div class="card">
+      <h3>ℹ️ Info</h3>
+      <div class="stat-row">
+        <span>Detection</span>
+        <span class="stat-val" style="font-size:0.8rem">YOLO+CLAHE</span>
+      </div>
+      <div class="stat-row">
+        <span>Storage</span>
+        <span class="stat-val" style="font-size:0.8rem">Google Drive</span>
+      </div>
+      <div class="stat-row">
+        <span>Dedup</span>
+        <span class="stat-val" style="font-size:0.8rem">Cooldown Timer</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<footer>Live Tracking System — powered by FastAPI · OpenCV · YOLO</footer>
+
+<script>
+  async function updateStats() {
+    try {
+      const res  = await fetch("/stats");
+      const data = await res.json();
+      document.getElementById("s-fps").textContent     = data.fps || "—";
+      document.getElementById("s-mode").textContent    = data.mode || "—";
+      document.getElementById("s-det").textContent     = data.detections || 0;
+      document.getElementById("s-saved").textContent   = data.saved || 0;
+      document.getElementById("s-skipped").textContent = data.skipped || 0;
+      document.getElementById("s-queue").textContent   = data.queue || 0;
+
+      const nightEl = document.getElementById("s-night");
+      const isNight = data.night === 1;
+      nightEl.innerHTML = isNight
+        ? '<span class="night-badge night-on">🌙 ON</span>'
+        : '<span class="night-badge night-off">☀ OFF</span>';
+    } catch(e) { /* ignore */ }
+  }
+  setInterval(updateStats, 2000);
+  updateStats();
+
+  async function resetCooldowns() {
+    const msg = document.getElementById("status-msg");
+    msg.textContent = "Resetting...";
+    try {
+      await fetch("/reset", { method: "POST" });
+      msg.textContent = "✅ Reset done!";
+    } catch(e) {
+      msg.textContent = "❌ Reset failed";
+    }
+    setTimeout(() => { msg.textContent = ""; }, 3000);
+  }
+
+  function refreshStream() {
+    const img = document.getElementById("stream");
+    img.src = "/video_feed?" + Date.now();
+  }
+
+  document.getElementById("stream").onerror = function() {
+    setTimeout(refreshStream, 3000);
+  };
+</script>
+</body>
+</html>
