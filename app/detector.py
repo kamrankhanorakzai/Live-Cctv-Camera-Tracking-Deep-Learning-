@@ -13,6 +13,14 @@ Production improvements:
   • Heartbeat offline frame keeps MJPEG stream alive during outages
   • [NEW] Dedicated frame-reader thread drains camera buffer continuously
     so the detection loop never blocks on cap.read() — eliminates stream lag
+  • [FIX] DVR restart freeze: FrameReader.stop() now clears stale frame cache
+    and joins thread before cap.release() to eliminate race conditions
+  • [FIX] self._latest cleared on reconnect so MJPEG endpoint never serves
+    frozen frames during DVR downtime
+  • [FIX] FrameReader joins in-flight cap.read() thread before cap.release()
+  • [FIX] read_fail_seen synced with reader.fail_count to avoid false reconnects
+  • [FIX] frame age gate — stale cached frames no longer masquerade as live signal
+  • [FIX] single-threaded cap.read() — never release() while another thread reads
 """
 
 import cv2
@@ -37,7 +45,8 @@ from app.config import (
     MIN_STABLE_FRAMES, MIN_OBJECT_FRAME_RATIO, MAX_SAVES_PER_CLASS,
     TARGET_PROC_FPS,
     RTSP_OPEN_TIMEOUT_MS, RTSP_READ_TIMEOUT_MS,
-    RTSP_RECONNECT_DELAY, RTSP_MAX_READ_FAILS,
+    RTSP_RECONNECT_DELAY, RTSP_MAX_READ_FAILS, RTSP_STALE_FRAME_S,
+    STREAM_MAX_WIDTH, STREAM_JPEG_QUALITY,
 )
 from app.logger import get_logger
 
@@ -54,7 +63,9 @@ def enhance_night(frame: np.ndarray) -> np.ndarray:
     lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
     l = _clahe.apply(l)
-    return cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
+    result = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
+    del lab, l, a, b
+    return result
 
 
 def is_night_frame(frame: np.ndarray) -> bool:
@@ -167,13 +178,12 @@ def _hog_detect(frame: np.ndarray) -> list:
     s       = 1 / DETECT_SCALE
     results = [(int(x*s), int(y*s), int(w*s), int(h*s), "person", 0.75)
                for (x, y, w, h) in bodies] if len(bodies) > 0 else []
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     if not results:
-        gray   = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         uppers = _upper_cascade.detectMultiScale(
             gray, 1.1, 3, minSize=(MIN_FACE_SIZE, MIN_FACE_SIZE))
         if len(uppers) > 0:
             results = [(x, y, w, h, "person", 0.6) for (x, y, w, h) in uppers]
-    gray  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     faces = _face_cascade.detectMultiScale(
         gray, 1.1, 5, minSize=(MIN_FACE_SIZE, MIN_FACE_SIZE))
     if len(faces) > 0:
@@ -322,47 +332,28 @@ def _open_cap() -> "cv2.VideoCapture | None":
     t = threading.Thread(target=_try, daemon=True)
     t.start()
     t.join(timeout=OPEN_TIMEOUT_S)
-    if result[0] is None:
-        log.warning(f"VideoCapture open timed out after {OPEN_TIMEOUT_S}s")
-    return result[0]
-
-
-def _read_frame_with_timeout(cap: "cv2.VideoCapture",
-                             timeout_s: float = 15.0
-                             ) -> "tuple[bool, np.ndarray | None]":
-    """
-    cap.read() in a daemon thread with a hard timeout.
-    Prevents the main loop from blocking forever when the DVR socket hangs.
-    """
-    result = [False, None]
-
-    def _do():
-        result[0], result[1] = cap.read()
-
-    t = threading.Thread(target=_do, daemon=True)
-    t.start()
-    t.join(timeout=timeout_s)
     if t.is_alive():
-        log.warning("cap.read() timed out — forcing reconnect")
-        return False, None
-    return result[0], result[1]
+        log.warning(
+            f"VideoCapture open timed out after {OPEN_TIMEOUT_S}s — "
+            "open thread still running (daemon, reaped on exit)")
+        result[0] = None
+    elif result[0] is None:
+        log.warning(f"VideoCapture open failed after {OPEN_TIMEOUT_S}s")
+    return result[0]
 
 
 # ── Frame reader thread ───────────────────────────────────────────────────────
 class FrameReader:
     """
-    Runs cap.read() in a tight background loop and stores only the
-    most-recent frame in a slot (not a queue).  The detection loop
-    picks up whatever is in the slot — no buffering means no lag.
-
-    The reader also counts consecutive failures so the caller can
-    trigger a reconnect without ever blocking on cap.read() itself.
+    Single background thread owns cap.read() — no nested read threads.
+    FFmpeg/VideoCapture is not thread-safe; only this thread touches self._cap.
     """
 
     def __init__(self, cap: "cv2.VideoCapture"):
         self._cap        = cap
         self._lock       = threading.Lock()
-        self._frame      = None          # latest raw frame (np.ndarray)
+        self._frame      = None
+        self._frame_ts   = 0.0
         self._fail_count = 0
         self._running    = True
         self._thread     = threading.Thread(
@@ -370,32 +361,70 @@ class FrameReader:
         self._thread.start()
 
     def _loop(self):
-        while self._running:
-            ret, frame = self._cap.read()
-            with self._lock:
-                if ret and frame is not None and frame.size > 0:
-                    self._frame      = frame
-                    self._fail_count = 0
-                else:
-                    self._fail_count += 1
-                    # Small back-off so we don't spin at 100 % CPU on error
-                    time.sleep(0.02)
+        try:
+            while self._running:
+                try:
+                    ret, frame = self._cap.read()
+                    with self._lock:
+                        if ret and frame is not None and frame.size > 0:
+                            self._frame     = frame
+                            self._frame_ts   = time.monotonic()
+                            self._fail_count = 0
+                        else:
+                            self._fail_count += 1
+                    if not ret:
+                        time.sleep(0.05)
+                except Exception as exc:
+                    log.error(f"FrameReader error: {exc}")
+                    with self._lock:
+                        self._fail_count += 1
+                    time.sleep(0.2)
+        finally:
+            try:
+                self._cap.release()
+            except Exception:
+                pass
+            log.debug("FrameReader released VideoCapture")
 
     def read(self) -> "tuple[bool, np.ndarray | None]":
         """Non-blocking: return (True, frame) or (False, None)."""
         with self._lock:
-            if self._frame is not None:
-                # Return a copy so the reader thread can overwrite freely
-                return True, self._frame.copy()
-            return False, None
+            if self._frame is None:
+                return False, None
+            age = time.monotonic() - self._frame_ts
+            if age > RTSP_STALE_FRAME_S:
+                return False, None
+            return True, self._frame.copy()
 
     @property
     def fail_count(self) -> int:
         with self._lock:
             return self._fail_count
 
-    def stop(self):
+    @property
+    def should_reconnect(self) -> bool:
+        with self._lock:
+            return self._fail_count >= RTSP_MAX_READ_FAILS
+
+    def is_alive(self) -> bool:
+        return self._thread.is_alive()
+
+    def stop(self) -> bool:
+        """
+        Stop the reader loop and wait for it to exit.
+        Returns True if the thread exited (safe to call cap.release()).
+        """
+        join_s = (RTSP_READ_TIMEOUT_MS / 1000.0) + 5.0
         self._running = False
+        with self._lock:
+            self._frame = None
+        self._thread.join(timeout=join_s)
+        if self._thread.is_alive():
+            log.warning(
+                f"FrameReader still in cap.read() after {join_s:.0f}s — "
+                "deferring cap.release()")
+            return False
+        return True
 
 
 # ── Main detector engine ──────────────────────────────────────────────────────
@@ -408,6 +437,7 @@ class DetectorEngine:
         self.upload_q    = upload_queue
         self._frame_lock = threading.Lock()
         self._latest     = None          # bytes (JPEG)
+        self._stream_seq = 0
         self._stats      = {
             "saved": 0, "skipped": 0,
             "fps": 0.0, "night": False,
@@ -435,9 +465,20 @@ class DetectorEngine:
         if self._thread:
             self._thread.join(timeout=10)
 
+    @property
+    def is_running(self) -> bool:
+        t = self._thread
+        return t is not None and t.is_alive()
+
     def get_frame(self) -> "bytes | None":
+        """Return the latest JPEG bytes for the MJPEG endpoint."""
         with self._frame_lock:
             return self._latest
+
+    @property
+    def stream_seq(self) -> int:
+        with self._frame_lock:
+            return self._stream_seq
 
     def get_stats(self) -> dict:
         s = dict(self._stats)
@@ -464,17 +505,40 @@ class DetectorEngine:
         if ok:
             with self._frame_lock:
                 self._latest = buf.tobytes()
+                self._stream_seq += 1
         del canvas
 
     def _push(self, frame: np.ndarray):
         h, w = frame.shape[:2]
-        if w > 854:
-            frame = cv2.resize(frame, (854, int(h * 854 / w)))
+        if w > STREAM_MAX_WIDTH:
+            frame = cv2.resize(frame, (STREAM_MAX_WIDTH, int(h * STREAM_MAX_WIDTH / w)))
         ok, buf = cv2.imencode(
-            ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 55])
+            ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, STREAM_JPEG_QUALITY])
         if ok:
             with self._frame_lock:
                 self._latest = buf.tobytes()
+                self._stream_seq += 1
+
+    def _draw_boxes(self, frame: np.ndarray, detections: list) -> np.ndarray:
+        for (x, y, w, h, cls, conf) in detections:
+            color = CLASS_COLORS.get(cls, DEFAULT_COLOR)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+            cv2.putText(frame, f"{cls} {conf:.0%}", (x, max(18, y - 8)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+        return frame
+
+    def _push_stream_view(self, frame: np.ndarray, last_detections: list,
+                          saved: int, banner: "str | None" = None):
+        """Single preview encode per loop — overlays + HUD for the dashboard."""
+        view = frame.copy()
+        if last_detections:
+            self._draw_boxes(view, last_detections)
+        if banner:
+            cv2.putText(view, banner, (10, 35),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (80, 80, 255), 2)
+        self._hud(view, saved, last_detections)
+        self._push(view)
+        del view
 
     def _hud(self, frame: np.ndarray, saved: int, detections: list):
         night_tag = "NIGHT" if self._stats.get("night") else "DAY"
@@ -490,15 +554,44 @@ class DetectorEngine:
 
     # ── Connect helper (used by both initial connect and reconnect) ────────────
 
+    @staticmethod
+    def _teardown_stream(cap, reader) -> None:
+        """
+        Stop the reader thread; it releases VideoCapture in its own finally block.
+        Never call cap.release() from here — FFmpeg is not thread-safe.
+        """
+        if reader is not None:
+            exited = reader.stop()
+            if not exited:
+                log.error(
+                    "FrameReader stuck in cap.read() — old session orphaned; "
+                    "opening a new connection anyway")
+        time.sleep(0.5)
+
     def _connect(self) -> "tuple[cv2.VideoCapture, FrameReader] | tuple[None, None]":
-        """Open the RTSP stream and return (cap, reader) or (None, None)."""
+        """
+        Open the RTSP stream and return (cap, reader) or (None, None).
+
+        FIX 4: clear self._latest at the start of every connect attempt so the
+        MJPEG endpoint never serves a frozen frame between retries. The
+        subsequent _push_offline_frame() immediately replaces None with a
+        live status banner so get_frame() always has something to return.
+        """
         attempt = 0
         while self._running:
             attempt += 1
             log.info(f"RTSP connect attempt #{attempt}: {_SAFE_URL}")
+
+            # FIX 4: wipe stale MJPEG cache before pushing the offline banner.
+            # Ensures get_frame() returns the *current* status, not a frozen
+            # frame from a previous successful session.
+            with self._frame_lock:
+                self._latest = None
+
             self._push_offline_frame("CAMERA OFFLINE — connecting…")
             cap = _open_cap()
             if cap is not None:
+                time.sleep(2)
                 reader = FrameReader(cap)
                 log.info(f"Stream opened on attempt #{attempt}")
                 return cap, reader
@@ -557,29 +650,48 @@ class DetectorEngine:
             ret, frame = reader.read()
             proc_fps_t  = time.time()
 
-            # ── No frame yet / read failures → maybe reconnect ────────────────
-            if not ret or frame is None:
-                read_fail_seen += 1
+            stale_signal = not ret or frame is None
+            need_reconnect = (
+                not reader.is_alive()
+                or reader.should_reconnect
+                or stale_signal
+            )
+
+            # ── No signal / stale cache / read failures → reconnect ───────────
+            if need_reconnect:
+                if reader.should_reconnect or not reader.is_alive():
+                    read_fail_seen = RTSP_MAX_READ_FAILS
+                else:
+                    read_fail_seen += 1
+
                 if time.time() - last_heartbeat >= self._HEARTBEAT_S:
                     self._push_offline_frame("NO SIGNAL — waiting…")
                     last_heartbeat = time.time()
 
-                # Also check what the reader thread itself is reporting
-                if reader.fail_count < RTSP_MAX_READ_FAILS and read_fail_seen < RTSP_MAX_READ_FAILS:
+                if (
+                    reader.is_alive()
+                    and not reader.should_reconnect
+                    and read_fail_seen < RTSP_MAX_READ_FAILS
+                ):
                     time.sleep(0.05)
                     continue
 
-                # Too many failures — reconnect
                 log.warning(
-                    f"{reader.fail_count} consecutive read failures — reconnecting…")
-                reader.stop()
-                cap.release()
+                    f"RTSP reconnect "
+                    f"(fails={reader.fail_count}, seen={read_fail_seen}, "
+                    f"alive={reader.is_alive()})")
+
+                with self._frame_lock:
+                    self._latest = None
+
+                self._push_offline_frame("DVR RESTARTING — reconnecting…")
+                self._teardown_stream(cap, reader)
                 cap = reader = None
                 read_fail_seen  = 0
                 last_detections = []
                 stable_counts   = {}
 
-                self._push_offline_frame("DVR RESTARTING — reconnecting…")
+                time.sleep(1)
                 cap, reader = self._connect()
                 if cap is None:
                     break
@@ -598,9 +710,6 @@ class DetectorEngine:
                 0.9 * self._stats["fps"] + 0.1 / max(now - fps_t, 1e-6), 1)
             fps_t = now
 
-            # Push raw frame immediately for smooth browser stream
-            self._push(frame)
-
             # ── Periodic GC ───────────────────────────────────────────────────
             if self._frame_idx % self._GC_EVERY_FRAMES == 0:
                 gc.collect()
@@ -610,24 +719,16 @@ class DetectorEngine:
 
             # ── Motion gate ───────────────────────────────────────────────────
             if not motion.has_motion(frame):
-                annotated = frame.copy()
-                cv2.putText(annotated, "NO MOTION", (10, 35),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (80, 80, 255), 2)
-                self._push(annotated)
+                self._push_stream_view(frame, last_detections, saved, "NO MOTION")
+                del frame
+                frame = None
                 continue
 
             # ── Run detection only every 3rd frame ────────────────────────────
             if self._frame_idx % 3 != 0:
-                if last_detections:
-                    annotated = frame.copy()
-                    for (x, y, w, h, cls, conf) in last_detections:
-                        color = CLASS_COLORS.get(cls, DEFAULT_COLOR)
-                        cv2.rectangle(annotated, (x, y), (x+w, y+h), color, 2)
-                        cv2.putText(annotated, f"{cls} {conf:.0%}",
-                                    (x, y-8), cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.55, color, 2)
-                    self._hud(annotated, saved, last_detections)
-                    self._push(annotated)
+                self._push_stream_view(frame, last_detections, saved)
+                del frame
+                frame = None
                 continue
 
             # ── Night mode ────────────────────────────────────────────────────
@@ -670,12 +771,9 @@ class DetectorEngine:
             fH, fW     = frame.shape[:2]
             frame_area = fH * fW
 
-            for (x, y, w, h, cls, conf) in detections:
-                color = CLASS_COLORS.get(cls, DEFAULT_COLOR)
-                cv2.rectangle(annotated, (x, y), (x+w, y+h), color, 2)
-                cv2.putText(annotated, f"{cls} {conf:.0%}", (x, y-8),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+            self._draw_boxes(annotated, detections)
 
+            for (x, y, w, h, cls, conf) in detections:
                 # Gate 1: object must fill minimum % of frame
                 if (w * h) / frame_area < MIN_OBJECT_FRAME_RATIO:
                     skipped += 1
@@ -709,6 +807,10 @@ class DetectorEngine:
                 try:
                     fname     = datetime_filename(cls)
                     img_bytes = img_to_bytes(save_img)
+                    qdepth = self.upload_q.qsize()
+                    if qdepth > 100:
+                        log.warning(
+                            f"Upload queue depth {qdepth} — Drive may be unreachable")
                     self.upload_q.put(("image", img_bytes, fname))
                     saved += 1
                     saves_per_class[cls] = saves_per_class.get(cls, 0) + 1
@@ -727,8 +829,5 @@ class DetectorEngine:
             del proc
             del frame
 
-        if reader:
-            reader.stop()
-        if cap:
-            cap.release()
+        self._teardown_stream(cap, reader)
         log.info("Detection engine stopped cleanly")

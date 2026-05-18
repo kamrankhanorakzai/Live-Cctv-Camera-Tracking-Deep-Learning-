@@ -1,5 +1,6 @@
 .env
 token.json
-*.weights
 credentials.json
-*.log
+flow.txt
+logs/
+__pycache__/

@@ -7,8 +7,6 @@
 <style>
   *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
-  /* ── Fluid type scale via clamp(min, preferred-vw, max)
-       min = ~360px phone, max = 1280px desktop               */
   :root {
     --fs-xs:   clamp(0.65rem,  1.8vw,  0.75rem);
     --fs-sm:   clamp(0.75rem,  2.2vw,  0.85rem);
@@ -71,7 +69,6 @@
   .badge-live { background: #ff3333; color: white; animation: pulse 1.5s infinite; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
 
-  /* ── Two-column on ≥641px, single column on mobile ── */
   .layout {
     display: grid;
     grid-template-columns: 1fr clamp(220px, 28vw, 300px);
@@ -84,18 +81,79 @@
     .layout { grid-template-columns: 1fr; }
   }
 
-  .video-box {
-    background: #111;
+  .video-wrap {
+    position: relative;
+    background: #000;
     border: 1px solid #222;
     border-radius: 8px;
     overflow: hidden;
     aspect-ratio: 16 / 9;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.45);
   }
-  .video-box img { width: 100%; height: 100%; object-fit: contain; display: block; }
+
+  .video-wrap img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+    background: #000;
+    transform: translateZ(0);
+    will-change: contents;
+  }
+
+  .video-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 10px;
+  }
+
+  .overlay-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .pill {
+    background: rgba(0, 0, 0, 0.65);
+    border: 1px solid rgba(0, 255, 136, 0.35);
+    color: var(--accent);
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 4px;
+    backdrop-filter: blur(4px);
+  }
+
+  .pill-detect {
+    border-color: rgba(0, 204, 255, 0.4);
+    color: var(--blue);
+  }
+
+  .pill-detect.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    box-shadow: 0 0 12px rgba(0, 255, 136, 0.25);
+  }
+
+  .stream-status {
+    font-size: var(--fs-xs);
+    color: #aaa;
+    background: rgba(0, 0, 0, 0.55);
+    padding: 4px 8px;
+    border-radius: 4px;
+    align-self: flex-end;
+  }
+
+  .stream-status.buffering { color: var(--orange); }
+  .stream-status.live { color: var(--accent); }
 
   .sidebar { display: flex; flex-direction: column; gap: var(--gap-sm); }
 
-  /* On mobile show stats + health as 2 columns */
   .sidebar-grid { display: contents; }
   @media (max-width: 640px) {
     .sidebar-grid {
@@ -191,14 +249,21 @@
 <body>
 
 <header>
-  <h1>🎥 Live CCTV Tracker</h1>
-  <span class="badge badge-live">● LIVE</span>
+  <h1>Live CCTV Tracker</h1>
+  <span class="badge badge-live">LIVE</span>
 </header>
 
 <div class="layout">
 
-  <div class="video-box">
-    <img id="stream" src="/video_feed" alt="Live Feed">
+  <div class="video-wrap">
+    <img id="stream" src="/video_feed" alt="Live feed with detections">
+    <div class="video-overlay">
+      <div class="overlay-top">
+        <span class="pill" id="stream-fps">FPS —</span>
+        <span class="pill pill-detect" id="stream-dets">0 objects</span>
+      </div>
+      <span class="stream-status live" id="stream-status">Stream connected</span>
+    </div>
   </div>
 
   <div class="sidebar">
@@ -206,7 +271,7 @@
     <div class="sidebar-grid">
 
       <div class="card">
-        <h3>📊 Stats</h3>
+        <h3>Stats</h3>
         <div class="stat-row"><span>Mode</span><span class="stat-val" id="s-mode">—</span></div>
         <div class="stat-row"><span>FPS</span><span class="stat-val" id="s-fps">—</span></div>
         <div class="stat-row"><span>Night</span><span id="s-night">—</span></div>
@@ -217,7 +282,7 @@
       </div>
 
       <div class="card">
-        <h3>❤️ Health</h3>
+        <h3>Health</h3>
         <div class="stat-row"><span>Status</span><span class="stat-val" id="h-status">—</span></div>
         <div class="stat-row"><span>Uptime</span><span class="stat-val" id="h-uptime">—</span></div>
       </div>
@@ -225,18 +290,18 @@
     </div>
 
     <div class="card">
-      <h3>🔧 Controls</h3>
-      <button class="btn btn-danger" onclick="resetCooldowns()">🔄 Reset Cooldowns</button>
+      <h3>Controls</h3>
+      <button class="btn btn-danger" onclick="resetCooldowns()">Reset Cooldowns</button>
       <div id="status-msg"></div>
       <br>
-      <button class="btn btn-info" onclick="refreshStream()">📡 Refresh Stream</button>
+      <button class="btn btn-info" onclick="refreshStream()">Refresh Stream</button>
     </div>
 
     <div class="card">
-      <h3>ℹ️ Info</h3>
+      <h3>Info</h3>
       <div class="stat-row"><span>Detection</span><span class="stat-val" style="font-size:var(--fs-xs)">YOLO+CLAHE</span></div>
       <div class="stat-row"><span>Storage</span><span class="stat-val" style="font-size:var(--fs-xs)">Google Drive</span></div>
-      <div class="stat-row"><span>Dedup</span><span class="stat-val" style="font-size:var(--fs-xs)">Cooldown</span></div>
+      <div class="stat-row"><span>Preview</span><span class="stat-val" style="font-size:var(--fs-xs)">Boxes + HUD</span></div>
     </div>
 
   </div>
@@ -249,50 +314,86 @@
     const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
     return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
   }
+
+  let lastStreamTick = Date.now();
+
   async function updateStats() {
     try {
       const d = await fetch("/stats").then(r => r.json());
-      document.getElementById("s-fps").textContent     = d.fps   || "—";
+      const fps = d.fps || 0;
+      const dets = d.detections || 0;
+      document.getElementById("s-fps").textContent     = fps || "—";
       document.getElementById("s-mode").textContent    = d.mode  || "—";
-      document.getElementById("s-det").textContent     = d.detections || 0;
+      document.getElementById("s-det").textContent     = dets;
       document.getElementById("s-saved").textContent   = d.saved     || 0;
       document.getElementById("s-skipped").textContent = d.skipped   || 0;
       document.getElementById("s-queue").textContent   = d.queue     || 0;
+      document.getElementById("stream-fps").textContent =
+        fps ? `FPS ${Number(fps).toFixed(1)}` : "FPS —";
+      const detPill = document.getElementById("stream-dets");
+      detPill.textContent = dets === 1 ? "1 object" : `${dets} objects`;
+      detPill.classList.toggle("active", dets > 0);
       document.getElementById("s-night").innerHTML = d.night === 1
-        ? '<span class="night-badge night-on">🌙 ON</span>'
-        : '<span class="night-badge night-off">☀ OFF</span>';
+        ? '<span class="night-badge night-on">NIGHT</span>'
+        : '<span class="night-badge night-off">DAY</span>';
     } catch(e) {}
   }
+
   async function updateHealth() {
     try {
       const d = await fetch("/health").then(r => r.json());
       const el = document.getElementById("h-status");
-      el.textContent = d.status === "ok" ? "✅ OK" : "⚠ DEGRADED";
+      el.textContent = d.status === "ok" ? "OK" : "DEGRADED";
       el.className   = "stat-val " + (d.status === "ok" ? "health-ok" : "health-bad");
       document.getElementById("h-uptime").textContent = fmtUptime(d.uptime_s || 0);
     } catch(e) {
       const el = document.getElementById("h-status");
-      el.textContent = "❌ OFFLINE";
+      el.textContent = "OFFLINE";
       el.className   = "stat-val health-bad";
     }
   }
-  setInterval(updateStats,  2000);
+
+  function watchStream() {
+    const img = document.getElementById("stream");
+    const status = document.getElementById("stream-status");
+    setInterval(() => {
+      const idle = Date.now() - lastStreamTick;
+      if (idle > 4000) {
+        status.textContent = "Buffering…";
+        status.className = "stream-status buffering";
+      } else {
+        status.textContent = "Stream live";
+        status.className = "stream-status live";
+      }
+    }, 1000);
+    img.addEventListener("load", () => { lastStreamTick = Date.now(); });
+  }
+
+  setInterval(updateStats,  1500);
   setInterval(updateHealth, 5000);
   updateStats(); updateHealth();
+  watchStream();
 
   async function resetCooldowns() {
     const msg = document.getElementById("status-msg");
     msg.textContent = "Resetting...";
     try {
       await fetch("/reset", { method: "POST" });
-      msg.textContent = "✅ Reset done!";
-    } catch(e) { msg.textContent = "❌ Reset failed"; }
+      msg.textContent = "Reset done";
+    } catch(e) { msg.textContent = "Reset failed"; }
     setTimeout(() => { msg.textContent = ""; }, 3000);
   }
+
   function refreshStream() {
-    document.getElementById("stream").src = "/video_feed?" + Date.now();
+    const img = document.getElementById("stream");
+    img.src = "/video_feed?" + Date.now();
+    lastStreamTick = Date.now();
   }
-  document.getElementById("stream").onerror = () => setTimeout(refreshStream, 3000);
+
+  document.getElementById("stream").onerror = () => {
+    document.getElementById("stream-status").textContent = "Reconnecting…";
+    setTimeout(refreshStream, 2000);
+  };
 </script>
 </body>
 </html>

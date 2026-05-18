@@ -12,10 +12,10 @@ except ImportError:
     pass
 
 # ── Camera ────────────────────────────────────────────────────────────────────
-USERNAME = os.getenv("CAM_USER", "kami")
-PASSWORD = os.getenv("CAM_PASS", "kami123")
+USERNAME = os.getenv("CAM_USER")
+PASSWORD = os.getenv("CAM_PASS")
 HOST     = os.getenv("CAM_HOST", "192.168.1.10")
-PORT     = int(os.getenv("CAM_PORT", "554"))
+PORT     = int(os.getenv("CAM_PORT"))
 
 _u = urllib.parse.quote(USERNAME, safe="")
 _p = urllib.parse.quote(PASSWORD, safe="")
@@ -52,7 +52,7 @@ MIN_FACE_SIZE = int(os.getenv("MIN_FACE_SIZE",  "50"))
 # Lower = more images captured per encounter; raise to prevent burst storage.
 # Recommended range — person: 8–20 s, other classes: 5–12 s
 PERSON_COOLDOWN_S = float(os.getenv("PERSON_COOLDOWN_S", "3"))
-CLASS_COOLDOWN_S  = float(os.getenv("CLASS_COOLDOWN_S",   "6"))
+CLASS_COOLDOWN_S  = float(os.getenv("CLASS_COOLDOWN_S",   "3"))
 
 # ── Motion gate ───────────────────────────────────────────────────────────────
 MOTION_THRESHOLD = int(os.getenv("MOTION_THRESHOLD", "800"))
@@ -90,4 +90,11 @@ RETRY_SCAN_INTERVAL_S  = int(os.getenv("RETRY_SCAN_INTERVAL_S",  "60"))
 RTSP_OPEN_TIMEOUT_MS  = int(os.getenv("RTSP_OPEN_TIMEOUT_MS",  "30000"))
 RTSP_READ_TIMEOUT_MS  = int(os.getenv("RTSP_READ_TIMEOUT_MS",  "15000"))
 RTSP_RECONNECT_DELAY  = int(os.getenv("RTSP_RECONNECT_DELAY",  "10"))
-RTSP_MAX_READ_FAILS   = int(os.getenv("RTSP_MAX_READ_FAILS",   "15"))
+RTSP_MAX_READ_FAILS   = int(os.getenv("RTSP_MAX_READ_FAILS",   "8"))
+# Treat cached frames older than this as dead signal (DVR restart / frozen stream)
+RTSP_STALE_FRAME_S    = float(os.getenv("RTSP_STALE_FRAME_S",  "5.0"))
+
+# ── Browser MJPEG preview (does not affect detection / uploads) ─────────────
+STREAM_MAX_WIDTH     = int(os.getenv("STREAM_MAX_WIDTH",     "960"))
+STREAM_JPEG_QUALITY  = int(os.getenv("STREAM_JPEG_QUALITY",  "78"))
+STREAM_TARGET_FPS    = float(os.getenv("STREAM_TARGET_FPS",  "20.0"))

@@ -240,43 +240,41 @@ def upload_worker(drive: DriveClient, upload_q: queue.Queue):
     # ── Main upload loop ──────────────────────────────────────────────────────
     while True:
         item = upload_q.get()
-        if item is None:
-            upload_q.task_done()
-            log.info("Upload worker received stop signal")
-            break
+        try:
+            if item is None:
+                log.info("Upload worker received stop signal")
+                break
 
-        kind = item[0]
+            kind = item[0]
 
-        if kind == "image":
-            _, img_bytes, fname = item
+            if kind == "image":
+                _, img_bytes, fname = item
 
-            # Duplicate guard
-            with in_flight_lock:
-                if fname in in_flight:
-                    log.warning(f"Duplicate upload request ignored: {fname}")
-                    upload_q.task_done()
-                    continue
-                in_flight.add(fname)
-
-            local_path = os.path.join(LOCAL_BACKUP_DIR, fname)
-            try:
-                # 1. Write locally first (crash-safe backup)
-                with open(local_path, "wb") as lf:
-                    lf.write(img_bytes)
-
-                # 2. Upload with backoff
-                ok = _upload_with_backoff(img_bytes, fname)
-
-                # 3. Remove local backup only on confirmed upload
-                if ok:
-                    try:
-                        os.remove(local_path)
-                    except OSError:
-                        pass
-            except Exception as exc:
-                log.error(f"Upload worker error [{fname}]: {exc}")
-            finally:
                 with in_flight_lock:
-                    in_flight.discard(fname)
+                    if fname in in_flight:
+                        log.warning(f"Duplicate upload request ignored: {fname}")
+                        continue
+                    in_flight.add(fname)
 
-        upload_q.task_done()
+                local_path = os.path.join(LOCAL_BACKUP_DIR, fname)
+                try:
+                    with open(local_path, "wb") as lf:
+                        lf.write(img_bytes)
+
+                    ok = _upload_with_backoff(img_bytes, fname)
+
+                    if ok:
+                        try:
+                            os.remove(local_path)
+                        except OSError:
+                            pass
+                except Exception as exc:
+                    log.error(f"Upload worker error [{fname}]: {exc}")
+                finally:
+                    with in_flight_lock:
+                        in_flight.discard(fname)
+
+        except Exception as exc:
+            log.error(f"Upload worker error: {exc}")
+        finally:
+            upload_q.task_done()

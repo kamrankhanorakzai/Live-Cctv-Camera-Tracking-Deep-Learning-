@@ -1,3 +1,4 @@
+import asyncio
 import queue
 import threading
 import time
@@ -9,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.config import LOCAL_BACKUP_DIR
+from app.config import LOCAL_BACKUP_DIR, STREAM_TARGET_FPS
 from app.drive import DriveClient, upload_worker
 from app.detector import DetectorEngine
 from app.logger import get_logger
@@ -33,10 +34,14 @@ async def lifespan(app: FastAPI):
     log.info("Shutting down…")
     app.state.engine.stop()
     app.state.upload_q.put(None)     # poison pill for upload_worker
+    loop = asyncio.get_running_loop()
     try:
-        app.state.upload_q.join()    # wait for in-flight uploads (max 30s)
-    except Exception:
-        pass
+        await asyncio.wait_for(
+            loop.run_in_executor(None, app.state.upload_q.join),
+            timeout=30.0,
+        )
+    except asyncio.TimeoutError:
+        log.warning("Upload queue did not drain in 30s — forcing shutdown")
     log.info("Shutdown complete")
 
 
@@ -67,7 +72,7 @@ def health():
     Returns HTTP 200 while the engine thread is alive.
     """
     engine    = app.state.engine
-    alive     = engine._thread is not None and engine._thread.is_alive()
+    alive     = engine.is_running
     uptime_s  = int(time.time() - _start_time)
     status    = "ok" if alive else "degraded"
     return JSONResponse(
@@ -110,32 +115,42 @@ def _offline_jpeg() -> bytes:
 
 def _mjpeg_generator():
     """
-    Yield MJPEG frames.
-    Re-sends last known frame (or offline placeholder) at least every
-    HEARTBEAT_S seconds to prevent browser connection timeout.
+    Yield MJPEG frames paced for smooth browser playback.
+    Uses stream_seq so each new preview frame is sent once (no duplicate skips).
     """
-    boundary       = b"--frame\r\n"
-    header         = b"Content-Type: image/jpeg\r\n\r\n"
-    POLL_SLEEP     = 0.01
-    HEARTBEAT_S    = 2.0
-    last_sent      = None
-    last_sent_time = time.time()
-    engine         = app.state.engine
+    boundary    = b"--frame\r\n"
+    header      = b"Content-Type: image/jpeg\r\n\r\n"
+    min_interval = 1.0 / max(STREAM_TARGET_FPS, 1.0)
+    heartbeat_s  = 2.0
+    engine       = app.state.engine
+    last_seq     = -1
+    last_emit    = 0.0
+    last_sent    = None
+    last_hb      = time.monotonic()
 
     while True:
+        seq   = engine.stream_seq
         frame = engine.get_frame()
-        now   = time.time()
+        now   = time.monotonic()
 
-        if frame is not None and frame is not last_sent:
-            last_sent      = frame
-            last_sent_time = now
+        if frame is None:
+            frame = _offline_jpeg()
+
+        new_frame = seq != last_seq
+        due_emit  = new_frame and (now - last_emit) >= min_interval
+
+        if due_emit:
+            last_seq  = seq
+            last_emit = now
+            last_sent = frame
+            last_hb   = now
             yield boundary + header + frame + b"\r\n"
-        elif now - last_sent_time >= HEARTBEAT_S:
-            payload        = last_sent if last_sent is not None else _offline_jpeg()
-            last_sent_time = now
+        elif now - last_hb >= heartbeat_s:
+            payload = last_sent if last_sent is not None else _offline_jpeg()
+            last_hb = now
             yield boundary + header + payload + b"\r\n"
         else:
-            time.sleep(POLL_SLEEP)
+            time.sleep(0.002)
 
 
 @app.get("/video_feed")
@@ -143,6 +158,11 @@ def video_feed():
     return StreamingResponse(
         _mjpeg_generator(),
         media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
